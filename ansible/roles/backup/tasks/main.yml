@@ -1,0 +1,118 @@
+---
+###############################################################################
+# Role: Backup - Automated backup and restore procedures
+###############################################################################
+
+- name: Create backup directory
+  file:
+    path: "{{ backup_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+    
+- name: Create backup script
+  template:
+    src: wordpress-backup.sh.j2
+    dest: /usr/local/bin/wordpress-backup.sh
+    mode: '0755'
+    owner: root
+    group: root
+    
+- name: Create restore script
+  template:
+    src: wordpress-restore.sh.j2
+    dest: /usr/local/bin/wordpress-restore.sh
+    mode: '0755'
+    owner: root
+    group: root
+    
+- name: Configure daily backup cron job
+  cron:
+    name: "WordPress daily backup"
+    minute: "0"
+    hour: "2"
+    job: "/usr/local/bin/wordpress-backup.sh >> /var/log/wordpress-backup.log 2>&1"
+    user: root
+    state: present
+  when: enable_automated_backups | default(true)
+  
+- name: Create backup log file
+  file:
+    path: /var/log/wordpress-backup.log
+    state: touch
+    owner: root
+    group: root
+    mode: '0640'
+    
+- name: Configure backup log rotation
+  copy:
+    dest: /etc/logrotate.d/wordpress-backup
+    content: |
+      /var/log/wordpress-backup.log {
+          weekly
+          missingok
+          rotate 4
+          compress
+          delaycompress
+          notifempty
+          create 0640 root root
+      }
+    mode: '0644'
+    
+- name: Create backup documentation
+  copy:
+    dest: /root/BACKUP_PROCEDURES.md
+    content: |
+      # WordPress Backup and Restore Procedures
+      
+      ## Automated Backups
+      
+      Backups run daily at 2:00 AM via cron job.
+      
+      Location: {{ backup_dir }}
+      Retention: {{ backup_retention_days }} days
+      
+      ## Manual Backup
+      
+      ```bash
+      sudo /usr/local/bin/wordpress-backup.sh
+      ```
+      
+      ## Restore from Backup
+      
+      ```bash
+      # List available backups
+      ls -lh {{ backup_dir }}
+      
+      # Restore (specify timestamp)
+      sudo /usr/local/bin/wordpress-restore.sh YYYYMMDD_HHMMSS
+      
+      # Example:
+      sudo /usr/local/bin/wordpress-restore.sh 20260109_020000
+      ```
+      
+      ## Backup Contents
+      
+      1. Database dump (compressed): db_TIMESTAMP.sql.gz
+      2. WordPress files (compressed): files_TIMESTAMP.tar.gz
+      
+      ## S3 Integration (Optional)
+      
+      Uncomment S3 upload commands in backup script and configure:
+      
+      ```bash
+      aws configure
+      ```
+      
+      Set AWS credentials and default region.
+      
+      ## Verification
+      
+      Check backup log:
+      ```bash
+      sudo tail -f /var/log/wordpress-backup.log
+      ```
+      
+      Test restore in staging environment before production use.
+    mode: '0644'

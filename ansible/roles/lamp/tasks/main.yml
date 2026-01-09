@@ -1,0 +1,172 @@
+---
+###############################################################################
+# Role: LAMP - Apache, MySQL, PHP installation and configuration
+###############################################################################
+
+- name: Install Apache web server
+  apt:
+    name:
+      - apache2
+      - apache2-utils
+    state: present
+    
+- name: Install MySQL server
+  apt:
+    name:
+      - mysql-server
+      - python3-pymysql
+    state: present
+    
+- name: Install PHP 8.1 and extensions
+  apt:
+    name:
+      - php8.1
+      - php8.1-cli
+      - php8.1-mysql
+      - php8.1-curl
+      - php8.1-gd
+      - php8.1-mbstring
+      - php8.1-xml
+      - php8.1-xmlrpc
+      - php8.1-soap
+      - php8.1-intl
+      - php8.1-zip
+      - php8.1-bcmath
+      - php8.1-imagick
+      - libapache2-mod-php8.1
+    state: present
+    
+- name: Enable Apache modules
+  apache2_module:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - rewrite
+    - ssl
+    - headers
+    - expires
+    - remoteip
+  notify: restart apache
+  
+- name: Configure Apache to trust Cloudflare IPs
+  template:
+    src: cloudflare.conf.j2
+    dest: /etc/apache2/conf-available/cloudflare.conf
+    mode: '0644'
+  notify: restart apache
+  
+- name: Enable Cloudflare Apache config
+  command: a2enconf cloudflare
+  args:
+    creates: /etc/apache2/conf-enabled/cloudflare.conf
+  notify: restart apache
+  
+- name: Configure PHP security settings
+  copy:
+    dest: /etc/php/8.1/apache2/conf.d/99-wordpress-security.ini
+    content: |
+      ; Security hardening
+      expose_php = Off
+      display_errors = Off
+      log_errors = On
+      error_log = /var/log/php_errors.log
+      max_execution_time = 60
+      max_input_time = 60
+      memory_limit = 256M
+      post_max_size = 64M
+      upload_max_filesize = 64M
+      allow_url_fopen = On
+      allow_url_include = Off
+      
+      ; Session security
+      session.cookie_httponly = 1
+      session.cookie_secure = 1
+      session.use_strict_mode = 1
+    mode: '0644'
+  notify: restart apache
+  
+- name: Start and enable Apache
+  systemd:
+    name: apache2
+    state: started
+    enabled: yes
+    
+- name: Secure MySQL installation - Set root password
+  community.mysql.mysql_user:
+    name: root
+    password: "{{ mysql_root_password }}"
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    login_user: root
+    login_password: ""
+    check_implicit_admin: yes
+    state: present
+  ignore_errors: yes
+  
+- name: Remove anonymous MySQL users
+  community.mysql.mysql_user:
+    name: ''
+    host_all: yes
+    state: absent
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+  ignore_errors: yes
+  
+- name: Remove MySQL test database
+  community.mysql.mysql_db:
+    name: test
+    state: absent
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+  ignore_errors: yes
+  
+- name: Create WordPress database
+  community.mysql.mysql_db:
+    name: "{{ wp_db_name }}"
+    state: present
+    encoding: utf8mb4
+    collation: utf8mb4_unicode_ci
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    
+- name: Create WordPress database user
+  community.mysql.mysql_user:
+    name: "{{ wp_db_user }}"
+    password: "{{ wp_db_password }}"
+    priv: "{{ wp_db_name }}.*:SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,INDEX,ALTER,CREATE TEMPORARY TABLES,LOCK TABLES"
+    host: localhost
+    state: present
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    
+- name: Configure MySQL performance tuning
+  blockinfile:
+    path: /etc/mysql/mysql.conf.d/mysqld.cnf
+    block: |
+      # Performance tuning for WordPress
+      max_connections = 50
+      innodb_buffer_pool_size = 256M
+      innodb_log_file_size = 64M
+      innodb_flush_log_at_trx_commit = 2
+      innodb_flush_method = O_DIRECT
+      query_cache_size = 0
+      query_cache_type = 0
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - WordPress Performance"
+  notify: restart mysql
+  
+- name: Start and enable MySQL
+  systemd:
+    name: mysql
+    state: started
+    enabled: yes
+    
+- name: Create PHP error log file
+  file:
+    path: /var/log/php_errors.log
+    state: touch
+    owner: www-data
+    group: www-data
+    mode: '0640'

@@ -1,0 +1,19 @@
+[global]
+    update every = 5
+    memory mode = dbengine
+    page cache size = 32
+    dbengine disk space = 256
+    
+[web]
+    bind to = 0.0.0.0:19999
+    allow connections from = *
+    
+[plugins]
+    apache = yes
+    mysql = yes
+    
+[health]
+    enabled = yes
+    
+[backend]
+    enabled = no

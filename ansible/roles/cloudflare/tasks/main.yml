@@ -1,0 +1,108 @@
+---
+###############################################################################
+# Role: Cloudflare - DNS and CDN configuration (via Terraform)
+# Note: Most Cloudflare configuration is handled in Terraform
+# This role validates connectivity and can perform additional tuning
+###############################################################################
+
+- name: Install Cloudflare origin CA certificate (for SSL/TLS strict mode)
+  get_url:
+    url: https://developers.cloudflare.com/ssl/static/origin_ca_rsa_root.pem
+    dest: /usr/local/share/ca-certificates/cloudflare-origin-ca.crt
+    mode: '0644'
+    
+- name: Update CA certificates
+  command: update-ca-certificates
+  changed_when: false
+  
+- name: Install certbot for Let's Encrypt (optional fallback)
+  apt:
+    name:
+      - certbot
+      - python3-certbot-apache
+    state: present
+    
+- name: Create directory for origin certificates
+  file:
+    path: /etc/ssl/cloudflare
+    state: directory
+    mode: '0755'
+    
+- name: Check DNS resolution
+  command: dig +short {{ domain_name }} @1.1.1.1
+  register: dns_check
+  changed_when: false
+  failed_when: false
+  
+- name: Display DNS resolution status
+  debug:
+    msg: "DNS resolution: {{ dns_check.stdout_lines }}"
+  when: dns_check.stdout_lines | length > 0
+  
+- name: Verify Cloudflare proxy headers in Apache config
+  lineinfile:
+    path: /etc/apache2/conf-available/cloudflare.conf
+    line: "RemoteIPHeader CF-Connecting-IP"
+    state: present
+  check_mode: yes
+  register: cf_header_check
+  
+- name: Create Cloudflare IP update script
+  copy:
+    dest: /usr/local/bin/update-cloudflare-ips.sh
+    content: |
+      #!/bin/bash
+      # Update Cloudflare IP ranges in Apache configuration
+      set -e
+      
+      CLOUDFLARE_CONF="/etc/apache2/conf-available/cloudflare.conf"
+      
+      # Fetch latest Cloudflare IPs
+      CF_IPS_V4=$(curl -s https://www.cloudflare.com/ips-v4)
+      CF_IPS_V6=$(curl -s https://www.cloudflare.com/ips-v6)
+      
+      # Backup current config
+      cp $CLOUDFLARE_CONF ${CLOUDFLARE_CONF}.backup
+      
+      # Generate new config
+      cat > $CLOUDFLARE_CONF <<EOF
+      # Trust Cloudflare proxy IPs
+      RemoteIPHeader CF-Connecting-IP
+      EOF
+      
+      # Add IPv4 ranges
+      for ip in $CF_IPS_V4; do
+        echo "RemoteIPTrustedProxy $ip" >> $CLOUDFLARE_CONF
+      done
+      
+      # Add IPv6 ranges
+      for ip in $CF_IPS_V6; do
+        echo "RemoteIPTrustedProxy $ip" >> $CLOUDFLARE_CONF
+      done
+      
+      # Test and reload Apache
+      apache2ctl configtest && systemctl reload apache2
+      
+      echo "Cloudflare IPs updated successfully at $(date)"
+    mode: '0755'
+    
+- name: Create cron job to update Cloudflare IPs monthly
+  cron:
+    name: "Update Cloudflare IP ranges"
+    special_time: monthly
+    job: "/usr/local/bin/update-cloudflare-ips.sh >> /var/log/cloudflare-ip-update.log 2>&1"
+    user: root
+    
+- name: Block direct IP access to origin server
+  blockinfile:
+    path: /etc/apache2/apache2.conf
+    marker: "# {mark} ANSIBLE MANAGED - Block direct IP access"
+    block: |
+      # Block requests not using the correct hostname
+      <VirtualHost *:80>
+          ServerName {{ ansible_default_ipv4.address }}
+          ServerAlias {{ ansible_all_ipv4_addresses | join(' ') }}
+          Redirect 403 /
+          ErrorDocument 403 "Direct IP access forbidden"
+      </VirtualHost>
+  notify: restart apache

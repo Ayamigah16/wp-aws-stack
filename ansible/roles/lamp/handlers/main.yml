@@ -1,0 +1,10 @@
+---
+- name: Restart apache
+  systemd:
+    name: apache2
+    state: restarted
+    
+- name: Restart mysql
+  systemd:
+    name: mysql
+    state: restarted

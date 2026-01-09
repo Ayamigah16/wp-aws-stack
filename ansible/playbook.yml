@@ -1,0 +1,63 @@
+---
+###############################################################################
+# Ansible Playbook: WordPress on AWS with Cloudflare
+# Purpose: Idempotent LAMP + WordPress deployment with security hardening
+# Usage: ansible-playbook -i inventory/hosts playbook.yml
+###############################################################################
+
+- name: Deploy WordPress LAMP Stack on AWS
+  hosts: wordpress
+  become: yes
+  gather_facts: yes
+  vars_files:
+    - vars/secrets.yml  # Encrypted with ansible-vault
+    
+  vars:
+    wp_dir: /var/www/html
+    backup_dir: /var/backups/wordpress
+    secrets_file: /etc/wordpress-secrets.conf
+    
+  pre_tasks:
+    - name: Wait for system to be ready
+      wait_for_connection:
+        timeout: 300
+        
+    - name: Gather system facts
+      setup:
+        
+  roles:
+    - common
+    - security
+    - lamp
+    - wordpress
+    - cloudflare
+    - monitoring
+    - backup
+    
+  post_tasks:
+    - name: Create deployment completion marker
+      copy:
+        dest: /root/ansible-deployment-complete.txt
+        content: |
+          WordPress Deployment via Ansible Completed: {{ ansible_date_time.iso8601 }}
+          Domain: {{ domain_name }}
+          Server: {{ inventory_hostname }}
+          
+          Next Steps:
+          1. Visit https://{{ domain_name }} to complete WordPress setup
+          2. Run validation: ansible-playbook -i inventory/hosts validate.yml
+          
+          Services Status:
+          - Apache: {{ ansible_facts.services['apache2.service'].state }}
+          - MySQL: {{ ansible_facts.services['mysql.service'].state }}
+          - Fail2ban: {{ ansible_facts.services['fail2ban.service'].state }}
+        mode: '0644'
+        
+    - name: Display completion message
+      debug:
+        msg:
+          - "===================================================="
+          - "WordPress deployment completed successfully!"
+          - "Site URL: https://{{ domain_name }}"
+          - "SSH: ssh ubuntu@{{ ansible_host }}"
+          - "===================================================="

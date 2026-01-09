@@ -1,0 +1,170 @@
+---
+###############################################################################
+# Role: Monitoring - Netdata installation and configuration
+###############################################################################
+
+- name: Check if Netdata is already installed
+  stat:
+    path: /usr/sbin/netdata
+  register: netdata_installed
+  
+- name: Download Netdata installation script
+  get_url:
+    url: https://my-netdata.io/kickstart.sh
+    dest: /tmp/netdata-kickstart.sh
+    mode: '0755'
+  when: not netdata_installed.stat.exists and enable_netdata | default(true)
+  
+- name: Install Netdata
+  command: /tmp/netdata-kickstart.sh --non-interactive --stable-channel --dont-wait
+  args:
+    creates: /usr/sbin/netdata
+  when: not netdata_installed.stat.exists and enable_netdata | default(true)
+  
+- name: Configure Netdata
+  template:
+    src: netdata.conf.j2
+    dest: /etc/netdata/netdata.conf
+    mode: '0644'
+  notify: restart netdata
+  when: enable_netdata | default(true)
+  
+- name: Enable Apache server-status for Netdata monitoring
+  apache2_module:
+    name: status
+    state: present
+  notify: restart apache
+  when: enable_netdata | default(true)
+  
+- name: Configure Apache server-status
+  copy:
+    dest: /etc/apache2/conf-available/netdata-status.conf
+    content: |
+      <Location "/server-status">
+          SetHandler server-status
+          Require local
+          Require ip 127.0.0.1
+      </Location>
+    mode: '0644'
+  notify: restart apache
+  when: enable_netdata | default(true)
+  
+- name: Enable Apache server-status config
+  command: a2enconf netdata-status
+  args:
+    creates: /etc/apache2/conf-enabled/netdata-status.conf
+  notify: restart apache
+  when: enable_netdata | default(true)
+  
+- name: Create MySQL user for Netdata monitoring
+  community.mysql.mysql_user:
+    name: netdata
+    password: ""
+    priv: "*.*:USAGE,REPLICATION CLIENT,PROCESS"
+    host: localhost
+    state: present
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+  when: enable_netdata | default(true)
+  
+- name: Configure Netdata MySQL monitoring
+  copy:
+    dest: /etc/netdata/python.d/mysql.conf
+    content: |
+      update_every: 10
+      priority: 90100
+      
+      local:
+        name: 'local'
+        user: 'netdata'
+        socket: '/var/run/mysqld/mysqld.sock'
+    mode: '0644'
+  notify: restart netdata
+  when: enable_netdata | default(true)
+  
+- name: Configure Netdata Apache monitoring
+  copy:
+    dest: /etc/netdata/python.d/apache.conf
+    content: |
+      update_every: 10
+      priority: 90100
+      
+      local:
+        name: 'local'
+        url: 'http://127.0.0.1/server-status?auto'
+    mode: '0644'
+  notify: restart netdata
+  when: enable_netdata | default(true)
+  
+- name: Configure log rotation for Netdata
+  copy:
+    dest: /etc/logrotate.d/netdata
+    content: |
+      /var/log/netdata/*.log {
+          daily
+          missingok
+          rotate 14
+          compress
+          delaycompress
+          notifempty
+          create 0644 netdata netdata
+      }
+    mode: '0644'
+  when: enable_netdata | default(true)
+  
+- name: Start and enable Netdata
+  systemd:
+    name: netdata
+    state: started
+    enabled: yes
+  when: enable_netdata | default(true)
+  
+- name: Create monitoring health check script
+  copy:
+    dest: /usr/local/bin/health-check.sh
+    content: |
+      #!/bin/bash
+      # System health check script
+      
+      echo "=== System Health Check - $(date) ==="
+      echo ""
+      
+      # Apache status
+      echo "Apache Status:"
+      systemctl is-active apache2
+      
+      # MySQL status
+      echo "MySQL Status:"
+      systemctl is-active mysql
+      
+      # Disk usage
+      echo "Disk Usage:"
+      df -h / | tail -1
+      
+      # Memory usage
+      echo "Memory Usage:"
+      free -h | grep Mem
+      
+      # CPU load
+      echo "CPU Load:"
+      uptime
+      
+      # Check WordPress
+      echo "WordPress HTTP Status:"
+      curl -s -o /dev/null -w "%{http_code}" http://localhost/
+      echo ""
+      
+      # Recent errors
+      echo "Recent Apache Errors:"
+      tail -5 /var/log/apache2/wordpress_error.log 2>/dev/null || echo "No errors"
+    mode: '0755'
+    
+- name: Install additional monitoring tools
+  apt:
+    name:
+      - sysstat
+      - iotop
+      - nethogs
+      - dstat
+    state: present

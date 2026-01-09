@@ -1,0 +1,112 @@
+#!/bin/bash
+###############################################################################
+# WordPress Restore Script
+# Usage: ./wordpress-restore.sh TIMESTAMP
+# Example: ./wordpress-restore.sh 20260109_020000
+###############################################################################
+
+set -euo pipefail
+
+if [ $# -ne 1 ]; then
+    echo "Usage: $0 TIMESTAMP"
+    echo "Example: $0 20260109_020000"
+    echo ""
+    echo "Available backups:"
+    ls -lh {{ backup_dir }}/db_*.sql.gz | awk '{print $9}' | sed 's/.*db_//' | sed 's/.sql.gz//'
+    exit 1
+fi
+
+TIMESTAMP=$1
+BACKUP_DIR="{{ backup_dir }}"
+WP_DIR="{{ wp_dir }}"
+DB_BACKUP="$BACKUP_DIR/db_$TIMESTAMP.sql.gz"
+FILES_BACKUP="$BACKUP_DIR/files_$TIMESTAMP.tar.gz"
+
+# Source database credentials
+source {{ secrets_file }}
+
+# Verify backup files exist
+if [ ! -f "$DB_BACKUP" ]; then
+    echo "ERROR: Database backup not found: $DB_BACKUP"
+    exit 1
+fi
+
+if [ ! -f "$FILES_BACKUP" ]; then
+    echo "ERROR: Files backup not found: $FILES_BACKUP"
+    exit 1
+fi
+
+echo "========================================="
+echo "WordPress Restore"
+echo "========================================="
+echo "Timestamp: $TIMESTAMP"
+echo "Database: $DB_BACKUP"
+echo "Files: $FILES_BACKUP"
+echo "========================================="
+echo ""
+read -p "This will OVERWRITE current WordPress installation. Continue? (yes/no): " CONFIRM
+
+if [ "$CONFIRM" != "yes" ]; then
+    echo "Restore cancelled."
+    exit 0
+fi
+
+echo "Starting restore at $(date)"
+
+# Stop Apache
+echo "Stopping Apache..."
+systemctl stop apache2
+
+# Restore database
+echo "Restoring database..."
+mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "DROP DATABASE IF EXISTS ${WP_DB_NAME};"
+mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "CREATE DATABASE ${WP_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+gunzip < "$DB_BACKUP" | mysql -u root -p"$MYSQL_ROOT_PASSWORD" "$WP_DB_NAME"
+
+if [ $? -eq 0 ]; then
+    echo "Database restored successfully"
+else
+    echo "ERROR: Database restore failed!"
+    systemctl start apache2
+    exit 1
+fi
+
+# Restore WordPress files
+echo "Restoring WordPress files..."
+rm -rf "$WP_DIR.backup" 2>/dev/null || true
+mv "$WP_DIR" "$WP_DIR.backup"
+mkdir -p "$(dirname $WP_DIR)"
+tar -xzf "$FILES_BACKUP" -C "$(dirname $WP_DIR)"
+
+if [ $? -eq 0 ]; then
+    echo "Files restored successfully"
+    rm -rf "$WP_DIR.backup"
+else
+    echo "ERROR: Files restore failed! Rolling back..."
+    rm -rf "$WP_DIR"
+    mv "$WP_DIR.backup" "$WP_DIR"
+    systemctl start apache2
+    exit 1
+fi
+
+# Set proper permissions
+echo "Setting permissions..."
+chown -R www-data:www-data "$WP_DIR"
+find "$WP_DIR" -type d -exec chmod 755 {} \;
+find "$WP_DIR" -type f -exec chmod 644 {} \;
+chmod 640 "$WP_DIR/wp-config.php"
+
+# Start Apache
+echo "Starting Apache..."
+systemctl start apache2
+
+echo "========================================="
+echo "Restore completed successfully at $(date)"
+echo "========================================="
+echo ""
+echo "Next steps:"
+echo "1. Verify site: https://{{ domain_name }}"
+echo "2. Check WordPress admin access"
+echo "3. Clear Cloudflare cache if needed"
+
+exit 0

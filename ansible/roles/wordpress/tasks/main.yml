@@ -1,0 +1,161 @@
+---
+###############################################################################
+# Role: WordPress - Application deployment and configuration
+###############################################################################
+
+- name: Download WordPress
+  get_url:
+    url: https://wordpress.org/latest.tar.gz
+    dest: /tmp/wordpress.tar.gz
+    mode: '0644'
+    
+- name: Extract WordPress
+  unarchive:
+    src: /tmp/wordpress.tar.gz
+    dest: /tmp/
+    remote_src: yes
+    creates: /tmp/wordpress/wp-config-sample.php
+    
+- name: Create WordPress directory
+  file:
+    path: "{{ wp_dir }}"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: '0755'
+    
+- name: Copy WordPress files
+  synchronize:
+    src: /tmp/wordpress/
+    dest: "{{ wp_dir }}/"
+  delegate_to: "{{ inventory_hostname }}"
+  
+- name: Check if wp-config.php exists
+  stat:
+    path: "{{ wp_dir }}/wp-config.php"
+  register: wp_config_stat
+  
+- name: Fetch WordPress salts
+  uri:
+    url: https://api.wordpress.org/secret-key/1.1/salt/
+    return_content: yes
+  register: wp_salts
+  when: not wp_config_stat.stat.exists
+  
+- name: Create wp-config.php from template
+  template:
+    src: wp-config.php.j2
+    dest: "{{ wp_dir }}/wp-config.php"
+    owner: www-data
+    group: www-data
+    mode: '0640'
+  when: not wp_config_stat.stat.exists
+  
+- name: Set WordPress directory permissions
+  file:
+    path: "{{ wp_dir }}"
+    state: directory
+    owner: www-data
+    group: www-data
+    recurse: yes
+    
+- name: Set directory permissions (755)
+  shell: find {{ wp_dir }} -type d -exec chmod 755 {} \;
+  changed_when: false
+  
+- name: Set file permissions (644)
+  shell: find {{ wp_dir }} -type f -exec chmod 644 {} \;
+  changed_when: false
+  
+- name: Secure wp-config.php
+  file:
+    path: "{{ wp_dir }}/wp-config.php"
+    owner: www-data
+    group: www-data
+    mode: '0640'
+    
+- name: Create uploads directory
+  file:
+    path: "{{ wp_dir }}/wp-content/uploads"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: '0755'
+    
+- name: Configure Apache virtual host
+  template:
+    src: wordpress.conf.j2
+    dest: /etc/apache2/sites-available/wordpress.conf
+    mode: '0644'
+  notify: restart apache
+  
+- name: Disable default Apache site
+  command: a2dissite 000-default.conf
+  args:
+    removes: /etc/apache2/sites-enabled/000-default.conf
+  notify: restart apache
+  
+- name: Enable WordPress Apache site
+  command: a2ensite wordpress.conf
+  args:
+    creates: /etc/apache2/sites-enabled/wordpress.conf
+  notify: restart apache
+  
+- name: Test Apache configuration
+  command: apache2ctl configtest
+  register: apache_test
+  changed_when: false
+  failed_when: apache_test.rc != 0
+  
+- name: Store database credentials securely
+  template:
+    src: wordpress-secrets.conf.j2
+    dest: "{{ secrets_file }}"
+    owner: root
+    group: root
+    mode: '0600'
+    
+- name: Create .htaccess for WordPress
+  copy:
+    dest: "{{ wp_dir }}/.htaccess"
+    content: |
+      # BEGIN WordPress
+      <IfModule mod_rewrite.c>
+      RewriteEngine On
+      RewriteBase /
+      RewriteRule ^index\.php$ - [L]
+      RewriteCond %{REQUEST_FILENAME} !-f
+      RewriteCond %{REQUEST_FILENAME} !-d
+      RewriteRule . /index.php [L]
+      </IfModule>
+      # END WordPress
+      
+      # Security headers
+      <IfModule mod_headers.c>
+      Header set X-Content-Type-Options "nosniff"
+      Header set X-Frame-Options "SAMEORIGIN"
+      Header set X-XSS-Protection "1; mode=block"
+      </IfModule>
+      
+      # Disable directory browsing
+      Options -Indexes
+      
+      # Protect wp-config.php
+      <files wp-config.php>
+      order allow,deny
+      deny from all
+      </files>
+    owner: www-data
+    group: www-data
+    mode: '0644'
+    
+- name: Install WP-CLI
+  get_url:
+    url: https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+    dest: /usr/local/bin/wp
+    mode: '0755'
+    
+- name: Cleanup temporary files
+  file:
+    path: /tmp/wordpress
+    state: absent

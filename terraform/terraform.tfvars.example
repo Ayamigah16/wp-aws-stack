@@ -1,0 +1,53 @@
+# Terraform Variables Configuration
+# Copy this file to terraform.tfvars and fill in your values
+
+# AWS Configuration
+aws_region = "eu-west-1"
+environment = "production"
+owner_email = "your-email@example.com"
+
+# EC2 Configuration
+instance_type = "t3.small"  # t3.micro for testing, t3.small+ for production
+root_volume_size = 30
+enable_eip = true  # Recommended: true for static IP
+
+# Security - CRITICAL: Restrict to your IP
+ssh_allowed_cidr = ["YOUR_IP_ADDRESS/32"]  # Example: ["203.0.113.10/32"]
+
+# SSH Key - Paste your public key
+ssh_public_key = "ssh-rsa AAAAB3NzaC1yc2E... your-key-here"
+
+# Database Credentials - Generate strong passwords
+wp_db_name = "wordpress"
+wp_db_user = "wpuser"
+wp_db_password = "GENERATE_STRONG_PASSWORD_MIN_16_CHARS"
+mysql_root_password = "GENERATE_STRONG_PASSWORD_MIN_16_CHARS"
+
+# Cloudflare Configuration
+cloudflare_api_token = "YOUR_CLOUDFLARE_API_TOKEN"
+cloudflare_zone_id = "YOUR_ZONE_ID"
+domain_name = "example.com"  # or "www.example.com"
+
+# Monitoring
+enable_netdata = true
+netdata_allowed_cidr = []  # Empty = not publicly accessible (recommended)
+# To enable Netdata access from your IP: ["YOUR_IP_ADDRESS/32"]
+
+# Backup Configuration
+enable_automated_backups = true
+backup_retention_days = 7
+
+# Generating Strong Passwords:
+# openssl rand -base64 24
+# or use a password manager
+
+# Getting Cloudflare Zone ID:
+# 1. Log into Cloudflare dashboard
+# 2. Select your domain
+# 3. Zone ID is in the right sidebar (API section)
+
+# Creating Cloudflare API Token:
+# 1. Go to: https://dash.cloudflare.com/profile/api-tokens
+# 2. Create Token -> Edit zone DNS template
+# 3. Permissions: Zone.Zone (Read), Zone.DNS (Edit)
+# 4. Zone Resources: Include -> Specific zone -> your-domain.com

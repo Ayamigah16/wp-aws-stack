@@ -1,0 +1,52 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!terraform.tfvars.example
+.terraform.lock.hcl
+terraform-outputs.json
+tfplan
+destroy.tfplan
+
+# Ansible
+*.retry
+ansible.log
+ansible/vars/secrets.yml
+
+# SSH Keys
+*.pem
+*.key
+id_rsa*
+
+# Backups
+*.sql
+*.sql.gz
+*.tar.gz
+backups/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+*~
+.*.swp
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Secrets
+*secrets*
+!*secrets*.example
+.env
+*.env
+
+# Temporary
+tmp/
+temp/
+*.tmp
